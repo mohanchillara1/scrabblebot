@@ -1,0 +1,283 @@
+// exp_tablesize: SNAPSHOT of final.ts (21:55 CT) used for bracket-survival A/B. Not the tournament entry.
+// "final": the tournament entry. A stage-adaptive dispatcher.
+//
+//   * tables with >= 3 players (Swiss, bracket)  -> economist engine (live-best on the real 6-player field)
+//                                                   + late-game cash burn (Vickrey, >= 5 players)
+//   * heads-up (exactly 2 players, the final)    -> adversary (tuned engine + going-rate bid rule), which beat tuned,
+//                                                   topbot-like, mcvalue and economist heads-up in the sim
+//   * every match gets its OWN fresh sub-strategy instance (keyed by matchId); no state crosses matches.
+//   * all sub-strategies are wrapped: exceptions -> {no words, bid 0}; words validated; bids clamped to the balance.
+//   * endgame: the whole rack is dumped when bagRemaining <= dumpAt (default 1), one auction before the last one,
+//     so a stalled server / burst of closing auctions cannot cost the big last-auction dump ("Match not running").
+//   * createStrategy() warms the dictionary and JIT-compiles the hot paths on synthetic matches.
+//
+// Tuning / A-B in the simulator: env FINAL='{"burn":false,"dumpAt":0,"hu":"tuned"}' overrides the config for every
+// instance (unset in production). Named variants are registered through STRATEGIES (fin-*).
+
+import type { AuctionRecord, MatchView, Strategy } from "../core/types.js";
+import * as W from "../engine/words.js";
+import { createStrategy as createAdversary } from "./adversary.js";
+import { createStrategy as createEconomist } from "./economist.js";
+import { createStrategy as createMcvalue } from "./mcvalue.js";
+import { createStrategy as createTuned } from "./tuned.js";
+import { BURN_DEFAULTS, burnBid, type BurnParams } from "./final/burn.js";
+
+export type RuleName = "economist" | "tuned" | "adversary" | "advR" | "mcvalue";
+
+export interface FinalConfig {
+  multi: RuleName; // rule for tables with >= 3 players
+  hu: RuleName; // rule for heads-up (2 players), Vickrey
+  huFP: RuleName; // rule for heads-up (2 players), FirstPrice (the adversary's push is Vickrey-only, so it adds nothing there)
+  burn: boolean; // late-game cash floor for the multi-player rule
+  burnParams: Partial<BurnParams>;
+  dumpAt: number; // dump the whole rack when 0 < bagRemaining <= dumpAt (0 = only the last auction, via the sub-strategy)
+  dumpBudgetMs: number;
+}
+
+export const FINAL_DEFAULTS: FinalConfig = {
+  multi: "economist",
+  hu: "advR",
+  huFP: "economist",
+  burn: true,
+  burnParams: {},
+  dumpAt: 1,
+  dumpBudgetMs: 30,
+};
+
+const ADV_ROBUST = { pushCapFrac: 0.7, pushMinFrac: 0.15 };
+
+const FACTORIES: Record<RuleName, () => Strategy> = {
+  economist: () => createEconomist(),
+  tuned: () => createTuned(),
+  adversary: () => createAdversary(),
+  // adversary with a larger shadow-bid cap (70% of balance): beats the default adversary in self-play (+12 pp win, n=400),
+  // and is at least as good against tuned / topbot-like / economist (docs/FINAL.md). The default cap (30%) is exploitable.
+  advR: () => createAdversary(ADV_ROBUST),
+  mcvalue: () => createMcvalue(),
+};
+
+function rackTotal(rack: Map<string, number>): number {
+  let t = 0;
+  for (const n of rack.values()) t += n;
+  return t;
+}
+
+/** Longest-first optimal partition of the whole rack, validated (dictionary + spellable in sequence). */
+function dumpWords(view: MatchView, budgetMs: number): string[] {
+  if (rackTotal(view.myRack) < 2) return [];
+  let R = W.rackToCounts(view.myRack);
+  const part = W.bestPartition(R, { timeBudgetMs: budgetMs });
+  const out: string[] = [];
+  for (const w of part.words) {
+    if (W.isWord(w) && W.canSpell(R, w)) {
+      out.push(w);
+      R = W.subtractWord(R, w);
+    }
+  }
+  return out;
+}
+
+function validateWords(view: MatchView, words: unknown): string[] {
+  if (!Array.isArray(words)) return [];
+  let R = W.rackToCounts(view.myRack);
+  const out: string[] = [];
+  for (const raw of words) {
+    if (typeof raw !== "string") continue;
+    const w = raw.toUpperCase();
+    if (w.length >= 2 && /^[A-Z]+$/.test(w) && W.isWord(w) && W.canSpell(R, w)) {
+      out.push(w);
+      R = W.subtractWord(R, w);
+    }
+  }
+  return out;
+}
+
+function mergeConfig(over?: Partial<FinalConfig>): FinalConfig {
+  let env: Partial<FinalConfig> = {};
+  try {
+    const raw = typeof process !== "undefined" ? process.env["FINAL"] : undefined;
+    if (raw) env = JSON.parse(raw) as Partial<FinalConfig>;
+  } catch {
+    env = {};
+  }
+  return { ...FINAL_DEFAULTS, ...(over ?? {}), ...env };
+}
+
+interface Slot {
+  sub: Strategy;
+  rule: RuleName;
+  players: number;
+}
+
+export function createFinal(over?: Partial<FinalConfig>, name = "final"): Strategy {
+  const cfg = mergeConfig(over);
+  const burnP: BurnParams = { ...BURN_DEFAULTS, ...cfg.burnParams };
+  const slots = new Map<number, Slot>(); // matchId -> sub-strategy
+  const order: number[] = [];
+
+  function slotFor(view: MatchView, announce: boolean): Slot {
+    let s = slots.get(view.matchId);
+    if (s) return s;
+    const players = view.players.length;
+    const rule: RuleName = players <= 2 ? (view.auctionType === "FirstPrice" ? cfg.huFP : cfg.hu) : cfg.multi;
+    let sub: Strategy;
+    try {
+      sub = FACTORIES[rule]();
+    } catch {
+      sub = FACTORIES.economist();
+    }
+    s = { sub, rule, players };
+    slots.set(view.matchId, s);
+    order.push(view.matchId);
+    while (order.length > 16) slots.delete(order.shift()!);
+    if (announce) {
+      try {
+        sub.onMatchStart?.(view);
+      } catch {
+        /* a throwing sub-strategy falls back to defaults below */
+      }
+    }
+    return s;
+  }
+
+  return {
+    name,
+
+    onMatchStart(view) {
+      // A fresh instance for every match, even when the same matchId is announced twice (reconnect).
+      slots.delete(view.matchId);
+      const i = order.indexOf(view.matchId);
+      if (i >= 0) order.splice(i, 1);
+      slotFor(view, true);
+    },
+
+    words(view) {
+      let s: Slot;
+      try {
+        const fresh = !slots.has(view.matchId);
+        s = slotFor(view, fresh);
+      } catch {
+        return [];
+      }
+      try {
+        if (cfg.dumpAt > 0 && view.bagRemaining > 0 && view.bagRemaining <= cfg.dumpAt) {
+          const d = dumpWords(view, cfg.dumpBudgetMs);
+          if (d.length > 0) return d;
+        }
+        return validateWords(view, s.sub.words(view));
+      } catch {
+        try {
+          return view.bagRemaining <= 1 ? dumpWords(view, cfg.dumpBudgetMs) : [];
+        } catch {
+          return [];
+        }
+      }
+    },
+
+    bid(view, letter) {
+      const bal = Math.max(0, Math.floor(Number.isFinite(view.myBalance) ? view.myBalance : 0));
+      if (view.bagRemaining === 0 || bal <= 0) return 0;
+      try {
+        const s = slotFor(view, !slots.has(view.matchId));
+        let b = s.sub.bid(view, letter);
+        if (cfg.burn && s.rule === cfg.multi && s.players >= 3) b = burnBid(view, letter, b, burnP);
+        if (!Number.isFinite(b)) return 0;
+        return Math.max(0, Math.min(bal, Math.round(b)));
+      } catch {
+        return 0;
+      }
+    },
+
+    onAuctionResult(view: MatchView, rec: AuctionRecord) {
+      try {
+        const s = slots.get(view.matchId) ?? slotFor(view, true);
+        s.sub.onAuctionResult?.(view, rec);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
+// ---- JIT / cache warm-up -------------------------------------------------------------------------------------------
+
+const WARM_BAG = "EAIRTONSLDUEAIORTNSLGEAIRTNSOBCMPEAIOUTNRFHVWYKJXQZ";
+
+function synthView(matchId: number, players: number, type: "Vickrey" | "FirstPrice", rackStr: string, round: number, total: number, bal: number): MatchView {
+  const rack = new Map<string, number>();
+  for (const c of rackStr) rack.set(c, (rack.get(c) ?? 0) + 1);
+  const ps = [];
+  for (let i = 0; i < players; i++) ps.push({ botId: 100 + i, balance: i === 0 ? bal : 70, score: i === 0 ? 20 : 25, isSim: false });
+  const hist: AuctionRecord[] = [];
+  for (let r = 1; r < round; r++) {
+    hist.push({ round: r, letter: WARM_BAG[(r * 7) % WARM_BAG.length]!, winnerBotId: 100 + (r % players), paid: 6 + (r % 9) });
+  }
+  return {
+    matchId,
+    myBotId: 100,
+    auctionType: type,
+    auctionDurationMs: 1000,
+    startingRackSize: 5,
+    players: ps,
+    myRack: rack,
+    myBalance: bal,
+    myScore: 20,
+    round,
+    bagRemaining: Math.max(0, total - round),
+    auctionHistory: hist,
+    wordHistory: [],
+  };
+}
+
+/** Run a few synthetic auctions through each rule so JIT-compiled code and caches are hot before match one. */
+export function warmUpStrategies(): number {
+  const t0 = performance.now();
+  try {
+    W.warmUp();
+    const big = new Map<string, number>();
+    for (const c of "AEEIOLNRSTDGUAEILNRSTBC") big.set(c, (big.get(c) ?? 0) + 1);
+    W.bestPartition(W.rackToCounts(big), { timeBudgetMs: 30 });
+    W.clearPartitionCache();
+    let mid = 900000;
+    for (const [players, type] of [[6, "Vickrey"], [2, "Vickrey"], [4, "FirstPrice"]] as const) {
+      const fin = createFinal({}, "warm");
+      const racks = ["AEIRT", "AEIRTNS", "AEIRTNSQ", "AEIRTNSDOL", "AEIRTNSDOLBCU", "AEIRTNSDOLBCUGE", "ERTOLNSAEIDUGBC"];
+      const id = mid++;
+      fin.onMatchStart?.(synthView(id, players, type, racks[0]!, 1, 68, 100));
+      for (let k = 0; k < racks.length; k++) {
+        const round = 4 + k * 9;
+        const v = synthView(id, players, type, racks[k]!, round, 68, 100 - k * 8);
+        fin.words(v);
+        fin.bid(v, WARM_BAG[(k * 5) % WARM_BAG.length]!);
+        fin.bid(v, "Z");
+      }
+      const last = synthView(id, players, type, "AEIRTNS", 67, 68, 40);
+      fin.words(last);
+      fin.words(synthView(id, players, type, "AEIRTNS", 66, 68, 40));
+      fin.bid(last, "E");
+    }
+    W.clearPartitionCache();
+  } catch {
+    /* warm-up is best-effort */
+  }
+  return performance.now() - t0;
+}
+
+let warmedMs = -1;
+export function createStrategy(): Strategy {
+  if (warmedMs < 0) warmedMs = warmUpStrategies(); // once per process; later instances reuse the hot code
+  return createFinal();
+}
+
+// tablesize experiment variants: only the >=3-player rule differs. All keep dump(1), burn (>=5p Vickrey), HU rules of final.
+export const STRATEGIES: Record<string, () => Strategy> = {
+  "ts-econ": () => createFinal({ multi: "economist" }, "ts-econ"),
+  "ts-tuned": () => createFinal({ multi: "tuned" }, "ts-tuned"),
+  "ts-mcv": () => createFinal({ multi: "mcvalue" }, "ts-mcv"),
+  "ts-advR": () => createFinal({ multi: "advR" }, "ts-advR"),
+  "ts-adv": () => createFinal({ multi: "adversary" }, "ts-adv"),
+  "ts-econ-nb": () => createFinal({ multi: "economist", burn: false }, "ts-econ-nb"),
+  "ts-tuned-nb": () => createFinal({ multi: "tuned", burn: false }, "ts-tuned-nb"),
+  "ts-econ-b3": () => createFinal({ multi: "economist", burnParams: { minPlayers: 3 } }, "ts-econ-b3"),
+  "ts-econ-b4": () => createFinal({ multi: "economist", burnParams: { minPlayers: 4 } }, "ts-econ-b4"),
+};

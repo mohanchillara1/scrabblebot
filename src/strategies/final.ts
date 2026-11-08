@@ -44,8 +44,9 @@ export const FINAL_DEFAULTS: FinalConfig = {
   huFP: "economist",
   burn: true,
   burnParams: {},
-  dumpAt: 1,
+  dumpAt: 2, // fleet-timing 22:15: best 6p signal, no 7p harm; also covers the server's end-of-match auction bursts
   dumpBudgetMs: 30,
+  adv: { pushCapFrac: 0.9, pushMinFrac: 0.1 }, // fleet-headsup 22:15: +2.0 +-0.6 pts/game, 3.4 SE vs the cap-0.7 copy
 };
 
 const ADV_ROBUST = { pushCapFrac: 0.7, pushMinFrac: 0.15 };

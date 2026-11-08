@@ -70,6 +70,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // Stall watchdog: reconnect when a running match shows no auction events for this long.
 const STALL_MIN_MS = Number(process.env.STALL_MIN_MS ?? 6000);
 const STALL_AUCTIONS = 5;
+// Idle heartbeat (tournament mode): one idempotent reducer call every HB_EVERY_MS must be answered within HB_TIMEOUT_MS.
+const HB_EVERY_MS = 20_000;
+const HB_TIMEOUT_MS = 10_000;
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<never> {
@@ -230,10 +233,12 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
       }
     }, 1_000);
     let regTimer: ReturnType<typeof setInterval> | undefined;
+    let hbTimer: ReturnType<typeof setInterval> | undefined;
     const stopTimers = () => {
       clearTimeout(connectTimer);
       clearInterval(liveness);
       if (regTimer) clearInterval(regTimer);
+      if (hbTimer) clearInterval(hbTimer);
     };
     stopTimersRef = stopTimers;
 
@@ -352,6 +357,36 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
           if (regTimer) clearInterval(regTimer);
           attempt();
           regTimer = setInterval(attempt, 15_000);
+          // Idle heartbeat: register_for_tournament is idempotent server-side and answers (ok or a rejection) on a live
+          // connection. While idle between tournament matches the stall watchdog cannot see a dead socket, so a call
+          // that gets no answer within HB_TIMEOUT_MS forces a reconnect.
+          if (hbTimer) clearInterval(hbTimer);
+          hbTimer = setInterval(() => {
+            if (current !== conn) return;
+            let answered = false;
+            try {
+              conn.reducers
+                .registerForTournament({ tournamentId: id })
+                .then(() => {
+                  answered = true;
+                })
+                .catch(() => {
+                  answered = true;
+                });
+            } catch {
+              answered = true; // a synchronous throw is not a network stall; the socket watchdog handles closed sockets
+            }
+            setTimeout(() => {
+              if (!answered && current === conn) {
+                try {
+                  conn.disconnect();
+                } catch {
+                  /* ignore */
+                }
+                finish(`heartbeat got no answer in ${HB_TIMEOUT_MS} ms (idle watchdog)`);
+              }
+            }, HB_TIMEOUT_MS);
+          }, HB_EVERY_MS);
         }
       }
       setTimeout(() => b.maybeJoinLobby("startup"), 1500);
