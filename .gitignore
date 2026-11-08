@@ -3,3 +3,8 @@ dist/
 .token-*
 *.log
 sim-out/
+research/.token-anon
+research/data/
+__pycache__/
+*.pyc
+*.secret
