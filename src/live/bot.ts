@@ -187,6 +187,10 @@ export class LiveBot {
     this.seenAt.clear();
     this.dirty.clear();
     this.scheduled = false;
+    // A joinLobby still in flight when the socket died never settles (SDK 2.12, no auto-reconnect),
+    // so lobbyBusy would stay true for the life of the process and silence every later lobby join.
+    this.lobbyBusy = false;
+    this.lobbyCooldownUntil = 0;
   }
 
   /** Resolves when everything scheduled so far (including async reducer follow-ups) is done. Tests/replay. */

@@ -265,6 +265,11 @@ function rawFor(rule: RuleName): Strategy {
 }
 
 interface Shadow {
+  burnOver: number; // burn floor pushed an in-range inner bid above the balance
+  rawOverBal: number;
+  rawFrac: number;
+  rawBadLate: number;
+  big: number; // |final bid - raw bid| > max(3, 30% of raw): beyond time-budget noise
   rawThrows: number;
   rawBadWords: number;
   rawBadBids: number;
@@ -272,15 +277,18 @@ interface Shadow {
   bidMismatch: number;
   calls: number;
   examples: string[];
+  serious: string[];
 }
-const zeroShadow = (): Shadow => ({ rawThrows: 0, rawBadWords: 0, rawBadBids: 0, wordMismatch: 0, bidMismatch: 0, calls: 0, examples: [] });
+const zeroShadow = (): Shadow => ({ burnOver: 0, rawOverBal: 0, rawFrac: 0, rawBadLate: 0, big: 0, rawThrows: 0, rawBadWords: 0, rawBadBids: 0, wordMismatch: 0, bidMismatch: 0, calls: 0, examples: [], serious: [] });
 
 /** A strategy that behaves exactly as final does but also runs a raw sub-strategy on the same views (per matchId). */
 function shadowedFinal(label: string, sh: Shadow): Strategy {
   const fin = createFinal({}, label);
   const raws = new Map<number, { rule: RuleName; s: Strategy; players: number }>();
   const ex = (s: string) => {
-    if (sh.examples.length < 12) sh.examples.push(s);
+    if (/THREW|invalid|not a legal|BIG bid gap/.test(s)) {
+      if (sh.serious.length < 30) sh.serious.push(s);
+    } else if (sh.examples.length < 6) sh.examples.push(s);
   };
   const rawOf = (v: MatchView) => {
     let r = raws.get(v.matchId);
@@ -320,11 +328,6 @@ function shadowedFinal(label: string, sh: Shadow): Strategy {
           sh.rawBadWords++;
           ex(`raw ${r.rule}.words invalid: ${c.problems[0]} (bag=${v.bagRemaining}, ${v.auctionType}, ${v.players.length}p)`);
         }
-        const dumpZone = v.bagRemaining <= 1;
-        if (!dumpZone && JSON.stringify(rw) !== JSON.stringify(out)) {
-          sh.wordMismatch++;
-          ex(`final words ${JSON.stringify(out)} != raw ${JSON.stringify(rw)} (bag=${v.bagRemaining})`);
-        }
       }
       return out;
     },
@@ -334,7 +337,11 @@ function shadowedFinal(label: string, sh: Shadow): Strategy {
       let rb: unknown = null;
       try {
         rb = r.s.bid(v, letter);
-        if (r.rule === r.rule && r.rule === "economist" && v.players.length >= 3 && typeof rb === "number" && Number.isFinite(rb)) rb = burnBid(v, letter, rb, BURN_DEFAULTS);
+        if (r.rule === "economist" && v.players.length >= 3 && typeof rb === "number" && Number.isFinite(rb)) {
+          const pre = rb;
+          rb = burnBid(v, letter, rb, BURN_DEFAULTS);
+          if ((rb as number) > v.myBalance && pre <= v.myBalance) sh.burnOver++;
+        }
       } catch (e) {
         sh.rawThrows++;
         ex(`raw ${r.rule}.bid THREW ${String(e)} (bag=${v.bagRemaining} round=${v.round})`);
@@ -342,12 +349,10 @@ function shadowedFinal(label: string, sh: Shadow): Strategy {
       if (rb !== null) {
         if (typeof rb !== "number" || !Number.isFinite(rb) || rb < 0 || rb > v.myBalance || !Number.isInteger(rb)) {
           sh.rawBadBids++;
+          if (typeof rb === "number" && rb > v.myBalance) sh.rawOverBal++;
+          else if (typeof rb === "number" && Number.isFinite(rb) && !Number.isInteger(rb)) sh.rawFrac++;
+          if (v.bagRemaining <= 3) sh.rawBadLate++;
           ex(`raw ${r.rule}.bid not a legal bid: ${String(rb)} (balance ${v.myBalance}, bag=${v.bagRemaining})`);
-        }
-        const want = v.bagRemaining === 0 ? 0 : Math.max(0, Math.min(Math.floor(v.myBalance), Math.round(Number(rb))));
-        if (typeof rb === "number" && Number.isFinite(rb) && want !== out) {
-          sh.bidMismatch++;
-          ex(`final bid ${out} != raw(clamped) ${want} (bag=${v.bagRemaining}, bal ${v.myBalance})`);
         }
       }
       return out;
@@ -400,8 +405,9 @@ function partMatches(n: number, seed: number, maxSec: number): number {
   for (let m = 0; m < n; m++) {
     if ((performance.now() - t0) / 1000 > maxSec) break;
     const players = [2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 7, 8, 9, 11][ri(rng, 0, 15)]!;
-    const maxRack = Math.min(8, Math.floor(97 / players));
-    const rack = ri(rng, 3, maxRack);
+    const [rLo, rHi] = (process.env["AUDIT_RACK"] ?? "3,8").split(",").map(Number) as [number, number];
+    const maxRack = Math.min(rHi, Math.floor(97 / players));
+    const rack = ri(rng, Math.min(rLo, maxRack), maxRack);
     const type: AuctionType = rng() < 0.5 ? "Vickrey" : "FirstPrice";
     const nFinal = players >= 4 && rng() < 0.3 ? 2 : 1;
     const parts: Participant[] = [];
@@ -471,12 +477,60 @@ function partMatches(n: number, seed: number, maxSec: number): number {
   );
   console.log(`[matches] leftover-playable at match end: ${agg.leftoverPlayable} seats (value ${agg.leftoverValue})  wordsMax=${agg.wordsMaxMs.toFixed(1)}ms bidMax=${agg.bidMaxMs.toFixed(1)}ms`);
   console.log(
-    `[matches] SHADOW (raw sub-strategy, same views): calls=${sh.calls} rawThrows=${sh.rawThrows} rawBadWords=${sh.rawBadWords} rawBadBids=${sh.rawBadBids} wordMismatch=${sh.wordMismatch} bidMismatch=${sh.bidMismatch}`,
+    `[matches] SHADOW (raw sub-strategy, same views): calls=${sh.calls} rawThrows=${sh.rawThrows} rawBadWords=${sh.rawBadWords} rawBadBids=${sh.rawBadBids} (over-balance ${sh.rawOverBal}, fractional ${sh.rawFrac}, of which bag<=3: ${sh.rawBadLate}; burn-induced over-balance ${sh.burnOver})`,
   );
   console.log(`[matches] configs: ${[...agg.perConfig].map(([k, v]) => `${k}:${v}`).join("  ")}`);
   for (const f of first) console.log("   FIRST:", f);
+  for (const f of sh.serious) console.log("   SHADOW-SERIOUS:", f);
   for (const f of sh.examples) console.log("   SHADOW:", f);
   return agg.invalidWords + agg.unspellableWords + agg.overBalanceBids + agg.badBids + agg.badReturns + agg.exceptions + agg.leftoverPlayable + sh.rawThrows + sh.rawBadWords + sh.rawBadBids;
+}
+
+// ---------- PART hu: heads-up robustness of the shipped Vickrey rule against hostile fixed-rule bidders ----------
+function partHu(n: number, seed: number, maxSec: number): number {
+  const t0 = performance.now();
+  const hostile: Record<string, (v: MatchView, l: string) => number> = {
+    flat60: (v) => Math.min(v.myBalance, 60),
+    whale80: (v) => Math.floor(v.myBalance * 0.8),
+    triple: (v, l) => Math.min(v.myBalance, 3 * (W.letterValue(l) + 2)),
+    zero: () => 0,
+  };
+  const mk = (name: string): Participant => {
+    const base = BASELINES["starter"]!();
+    const bid = hostile[name]!;
+    return { kind: "real", name, strategy: { ...base, name, bid: (v: MatchView, l: string) => Math.max(0, Math.min(v.myBalance, Math.floor(bid(v, l)))) } };
+  };
+  const cands: [string, () => Strategy][] = [
+    ["final", () => createFinal({}, "final")],
+    ["tuned", () => createTuned()],
+    ["economist", () => createEconomist()],
+  ];
+  for (const type of ["Vickrey", "FirstPrice"] as AuctionType[]) {
+    for (const opp of Object.keys(hostile)) {
+      const line: string[] = [];
+      for (const [cn, cf] of cands) {
+        let sc = 0;
+        let oppSc = 0;
+        let wins = 0;
+        let m = 0;
+        for (; m < n; m++) {
+          if ((performance.now() - t0) / 1000 > maxSec) break;
+          const seatMe = m % 2;
+          const parts: Participant[] = seatMe === 0 ? [{ kind: "real", name: cn, strategy: cf() }, mk(opp)] : [mk(opp), { kind: "real", name: cn, strategy: cf() }];
+          const res = runMatch(parts, { auctionType: type, startingRackSize: 5, seed: seed * 100 + 5, matchIndex: m, matchId: 5000 + m });
+          const me = res.seats[seatMe]!;
+          const ot = res.seats[1 - seatMe]!;
+          sc += me.score;
+          oppSc += ot.score;
+          if (me.score > ot.score) wins++;
+          else if (me.score === ot.score) wins += 0.5;
+        }
+        line.push(`${cn}: ${(sc / m).toFixed(0)} vs ${(oppSc / m).toFixed(0)}, win ${((100 * wins) / m).toFixed(0)}% (n=${m})`);
+      }
+      console.log(`[hu ${type}] vs ${opp.padEnd(8)} | ${line.join(" | ")}`);
+    }
+  }
+  return 0;
 }
 
 const part = process.env["AUDIT_PART"] ?? "views";
@@ -484,6 +538,6 @@ const N = Number(process.env["AUDIT_N"] ?? (part === "views" ? 2000 : 40));
 const SEED = Number(process.env["AUDIT_SEED"] ?? 1);
 const MAXSEC = Number(process.env["AUDIT_MAXSEC"] ?? 170);
 W.warmUp();
-const bad = part === "views" ? partViews(N, SEED) : partMatches(N, SEED, MAXSEC);
+const bad = part === "views" ? partViews(N, SEED) : part === "hu" ? partHu(N, SEED, MAXSEC) : partMatches(N, SEED, MAXSEC);
 console.log(`AUDIT ${part} seed=${SEED}: ${bad} flagged items`);
 process.exit(bad > 0 ? 1 : 0);

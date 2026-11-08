@@ -229,9 +229,11 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
         }
       }
     }, 1_000);
+    let regTimer: ReturnType<typeof setInterval> | undefined;
     const stopTimers = () => {
       clearTimeout(connectTimer);
       clearInterval(liveness);
+      if (regTimer) clearInterval(regTimer);
     };
     stopTimersRef = stopTimers;
 
@@ -311,10 +313,46 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
         settled = true;
       }, 0);
       if (cfg.tournamentId) {
-        conn.reducers
-          .registerForTournament({ tournamentId: BigInt(cfg.tournamentId) })
-          .then(() => log(`${tag} registered for tournament ${cfg.tournamentId}`))
-          .catch((e) => log(`${tag} tournament ${cfg.tournamentId} registration: ${errMsg(e)}`));
+        // Registration is retried every 15 s until it succeeds (or the server says we are already in), so a bot
+        // that connects before the admin opens registration, or a transient error, still gets entered.
+        // A non-numeric id is reported once and must not stop the startup lobby join below.
+        let tid: bigint | null = null;
+        try {
+          tid = BigInt(cfg.tournamentId.trim());
+        } catch {
+          log(`${tag} TOURNAMENT_ID '${cfg.tournamentId}' is not a number; NOT registering`);
+        }
+        if (tid !== null) {
+          const id = tid;
+          let done = false;
+          let tries = 0;
+          const attempt = (): void => {
+            if (done || current !== conn) return;
+            tries++;
+            try {
+              conn.reducers
+                .registerForTournament({ tournamentId: id })
+                .then(() => {
+                  done = true;
+                  if (regTimer) clearInterval(regTimer);
+                  log(`${tag} registered for tournament ${id}`);
+                })
+                .catch((e) => {
+                  const m = errMsg(e);
+                  if (/already/i.test(m)) {
+                    done = true;
+                    if (regTimer) clearInterval(regTimer);
+                  }
+                  if (tries <= 3 || tries % 20 === 0) log(`${tag} tournament ${id} registration (try ${tries}): ${m}`);
+                });
+            } catch (e) {
+              log(`${tag} tournament ${id} registration threw (try ${tries}): ${errMsg(e)}`);
+            }
+          };
+          if (regTimer) clearInterval(regTimer);
+          attempt();
+          regTimer = setInterval(attempt, 15_000);
+        }
       }
       setTimeout(() => b.maybeJoinLobby("startup"), 1500);
     }
