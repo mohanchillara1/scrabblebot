@@ -15,8 +15,9 @@
 
 import type { AuctionRecord, MatchView, Strategy } from "../core/types.js";
 import * as W from "../engine/words.js";
-import { createStrategy as createAdversary } from "./adversary.js";
-import { createStrategy as createEconomist } from "./economist.js";
+import { createStrategy as createAdversary, type AdvParams } from "./adversary.js";
+import { createEconomist as createEconomistP, type EconParams } from "./economist.js";
+const createEconomist = (p: Partial<EconParams> = {}): Strategy => createEconomistP(p);
 import { createStrategy as createMcvalue } from "./mcvalue.js";
 import { createStrategy as createTuned } from "./tuned.js";
 import { BURN_DEFAULTS, burnBid, type BurnParams } from "./final/burn.js";
@@ -31,6 +32,10 @@ export interface FinalConfig {
   burnParams: Partial<BurnParams>;
   dumpAt: number; // dump the whole rack when 0 < bagRemaining <= dumpAt (0 = only the last auction, via the sub-strategy)
   dumpBudgetMs: number;
+  econ?: Partial<EconParams>; // overrides for every economist instance
+  adv?: Partial<AdvParams>; // overrides for the robust adversary (advR)
+  byPlayers?: Record<string, RuleName>; // per table size rule for >= 3 players (falls back to multi)
+  burnRules?: RuleName[]; // rules that get the late cash burn (default: just multi)
 }
 
 export const FINAL_DEFAULTS: FinalConfig = {
@@ -44,6 +49,12 @@ export const FINAL_DEFAULTS: FinalConfig = {
 };
 
 const ADV_ROBUST = { pushCapFrac: 0.7, pushMinFrac: 0.15 };
+
+function makeRule(rule: RuleName, cfg: FinalConfig): Strategy {
+  if (rule === "economist") return createEconomist(cfg.econ ?? {});
+  if (rule === "advR") return createAdversary({ ...ADV_ROBUST, ...(cfg.adv ?? {}) });
+  return FACTORIES[rule]();
+}
 
 const FACTORIES: Record<RuleName, () => Strategy> = {
   economist: () => createEconomist(),
@@ -118,10 +129,11 @@ export function createFinal(over?: Partial<FinalConfig>, name = "final"): Strate
     let s = slots.get(view.matchId);
     if (s) return s;
     const players = view.players.length;
-    const rule: RuleName = players <= 2 ? (view.auctionType === "FirstPrice" ? cfg.huFP : cfg.hu) : cfg.multi;
+    const rule: RuleName =
+      players <= 2 ? (view.auctionType === "FirstPrice" ? cfg.huFP : cfg.hu) : (cfg.byPlayers?.[String(players)] ?? cfg.multi);
     let sub: Strategy;
     try {
-      sub = FACTORIES[rule]();
+      sub = makeRule(rule, cfg);
     } catch {
       sub = FACTORIES.economist();
     }
@@ -179,7 +191,7 @@ export function createFinal(over?: Partial<FinalConfig>, name = "final"): Strate
       try {
         const s = slotFor(view, !slots.has(view.matchId));
         let b = s.sub.bid(view, letter);
-        if (cfg.burn && s.rule === cfg.multi && s.players >= 3) b = burnBid(view, letter, b, burnP);
+        if (cfg.burn && (cfg.burnRules ?? [cfg.multi]).includes(s.rule) && s.players >= 3) b = burnBid(view, letter, b, burnP);
         if (!Number.isFinite(b)) return 0;
         return Math.max(0, Math.min(bal, Math.round(b)));
       } catch {
