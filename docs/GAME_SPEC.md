@@ -65,5 +65,5 @@ As of 2026-11-07 18:05 CT: 26,124 matches, 1,776,183 auction_result rows, 411,01
 
 ## Time and compute rules
 - Tournament starts 2026-11-07 22:45 CT. All code must be done well before.
-- Laptop compute rule (dad): run every simulation with `nice -n 19`, ONE process, ≤ 3 minutes wall clock per
+- Laptop compute rule: run every simulation with `nice -n 19`, ONE process, ≤ 3 minutes wall clock per
   run, no worker pools. Prefer more, shorter runs with fixed seeds.

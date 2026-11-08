@@ -24,6 +24,4 @@
 - Wordlist has NO "QI" / "ZA" (has JO, XU, OXO). Any strategy assuming Scrabble short words must call W.isWord.
 - Not done / limits: bestPartition candidate setup (~0.3-8 ms) is not interruptible; memo cap 700k entries -> abort with best-so-far;
   per-letter count > 31 clamped in partition memo key (real bag max is 12).
-- Not committed (hard rule 2): orchestrator commits. NOTE for the commit: CLAUDE.md rule 7 says commits that reach GitHub carry
-  author+committer Mohan Chillara <mohan.kchill@gmail.com> and NO "Co-Authored-By: Claude" / Claude-Session trailers; run
-  `git log --format='%an <%ae> | %cn <%ce>%n%b' | grep -i claude` before any push (expect nothing).
+- Not committed by this worker; the orchestrator commits.

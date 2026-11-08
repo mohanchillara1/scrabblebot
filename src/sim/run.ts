@@ -56,7 +56,7 @@ function int(args: Map<string, string | true>, key: string, dflt: number): numbe
 }
 
 async function main(): Promise<void> {
-  // Same effect as `nice -n 19` (dad's laptop rule); harmless if it fails.
+  // Same effect as `nice -n 19` (laptop compute rule); harmless if it fails.
   try {
     setPriority(0, 19);
   } catch {

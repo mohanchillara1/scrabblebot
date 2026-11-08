@@ -21,7 +21,7 @@ approximation, not a measured series).
 | hxo-c9p12 (cap-0.9, push 1.2 copy) | 84.5 +-2.6 | 83.5 +-2.6 | +0.7 +-1.1 | -1.0 +-0.7 | 96 -> 95 |
 | tuned | 90.0 +-2.1 | 88.5 +-2.3 | +0.9 +-0.9 | -1.5 +-1.1 | 98.7 -> 98.1 |
 | topbot-like | 66.5 +-3.3 | 66.5 +-3.3 | -0.1 +-0.3 | 0.0 +-0.0 | 77 -> 77 |
-| economist (n=30 only: economist is slow; see below for the rerun) | 76.7 +-7.9 | 70.0 +-8.5 | +2.5 +-10.4 | -6.7 +-11.7 | n/a |
+| economist (n=30; rerun n=40 seed 751: c7 57.5 -> c9 60.0 win, d.score +11.7 +-9.9, d.win +2.5 +-9.1) | 76.7 +-7.9 | 70.0 +-8.5 | +2.5 +-10.4 | -6.7 +-11.7 | n/a |
 
 Equal-weight mean over the six n=200 opponents: d.score **+2.0 +-0.6 (3.3 SE)**, d.win **+0.9 +-0.7 pp** (1.3 SE). The only large
 effect is against a copy of cap 0.9 (exactly the "someone tuned the cap up" opponent); every other entry is within 1.5 SE of zero in either
@@ -55,7 +55,17 @@ tuned -12.5 +-3.4; vs topbot-like -3.5 +-3.6 pp). push 1.1 (cap-0.7 base, n=40, 
 The economist is slow in the sim (~0.2 matches/s per strategy), so each FP run completed only n=15-16 of the requested matches. Seeds
 741-743, 4 variants per run, paired vs `hxfp-econ` (economist, the shipped FP heads-up rule):
 
-FP_TABLE_PLACEHOLDER
+| opponent (n) | hxfp-tuned - econ: d.score / d.win pp | econ fpShade0 1.0 - econ: d.score / d.win pp | econ fpShade0 1.2 - econ |
+|---|---|---|---|
+| topbot-like (15) | +122.0 +-29.5 / +20.0 +-10.7 | +92.1 +-37.9 / +13.3 +-13.3 | +1.5 +-48.2 / -6.7 +-18.2 |
+| hxo-c7, tuned engine (16) | -28.9 +-18.4 / -31.2 +-17.6 | -8.3 +-19.2 / -6.2 +-14.3 | +23.4 +-21.0 / +12.5 +-12.5 |
+| tuned (17) | -8.6 +-9.7 / -5.9 +-16.0 | +36.1 +-13.9 / +35.3 +-14.7 | -8.6 +-18.9 / 0.0 +-17.1 |
+| fresh confirmation, seed 761, sampled from tuned/topbot-like/hxo-c7 (19) | not run | **-6.0 +-12.1 / -5.3 +-9.3** | not run |
+
+`fpShade0 1.0` looked like a lead (inverse-variance pooled over the first three runs, n=48: d.score +26.6 +-10.8, 2.5 SE, mined from
+3 variants x 3 opponents) but the fresh confirmation run did not reproduce it (-6.0 +-12.1); pooled over all four runs it is +12.1 +-8.1
+(1.5 SE). Not recommended. Absolute FP win rates for the shipped economist: 80% vs topbot-like, 81% vs the tuned-engine copy, 53% vs tuned,
+79% in the mixed confirmation run (all n~15-19).
 
 Conclusion: no change recommended for FirstPrice. The two best data points point in opposite directions (economist better vs the
 tuned-engine opponent, tuned better vs topbot-like) and each has n~15. FINAL.md's earlier result (n=50-54) had the same sign pattern.
@@ -65,7 +75,7 @@ FirstPrice remains a guess for everyone.
 
 With the recommended rule (cap 0.9): vs topbot-like ~77%; vs tuned ~98%; vs a default adversary ~70%; vs a cap-0.7 copy ~63%; vs a cap-0.9
 copy ~62% (49% with the shipped cap 0.7, i.e. the shipped rule is a coin flip against its own best adaptive reply and cap 0.9 turns that
-into a 62% series favorite). Economist: see section 1 / ECON_PLACEHOLDER.
+into a 62% series favorite). Economist: the n=30 and n=40 reruns both show c9 >= c7 (d.score +2.5 +-10.4 and +11.7 +-9.9; d.win -6.7 +-11.7 and +2.5 +-9.1 pp); c9 series3 ~67% vs c7 ~63% in the larger run (c9 win 60.0 +-7.8, c7 57.5 +-7.9), underpowered.
 
 ## 5. Recommendation
 
