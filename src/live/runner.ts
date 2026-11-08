@@ -67,6 +67,9 @@ function loadToken(p: string): string | undefined {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// Stall watchdog: reconnect when a running match shows no auction events for this long.
+const STALL_MIN_MS = Number(process.env.STALL_MIN_MS ?? 6000);
+const STALL_AUCTIONS = 5;
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<never> {
@@ -155,6 +158,7 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
 
     const accept = (matchId: bigint) => mode === "targeted" || interest.has(matchId);
     let connected = false;
+    let lastAuctionAt = Date.now(); // last auction insert/update or result seen on this connection (stall watchdog)
     let stopTimersRef: () => void = () => {};
     const finishOuter = finish;
     finish = (why: string) => {
@@ -199,8 +203,32 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
           /* ignore */
         }
         finish("socket closed (watchdog)");
+        return;
       }
-    }, 2_000);
+      // Half-open socket: seen live 2026-11-07 21:20, the SDK kept the socket "open" but delivered no rows for
+      // 8 minutes while our match ran to the end. In a running match an auction closes every auctionDurationMs,
+      // so silence much longer than that means the connection is dead: reconnect and resync.
+      if (connected && ready && bot) {
+        const running = bot.runningMatchIds();
+        if (running.length > 0) {
+          let durMs = 1000;
+          for (const id of running) {
+            const d = Number((bot as unknown as { store?: { matches?: Map<bigint, { auctionDurationMs?: unknown }> } })
+              .store?.matches?.get(id)?.auctionDurationMs ?? 1000);
+            if (Number.isFinite(d)) durMs = Math.max(durMs, d);
+          }
+          const stallMs = Math.max(STALL_MIN_MS, STALL_AUCTIONS * durMs);
+          if (Date.now() - lastAuctionAt > stallMs) {
+            try {
+              conn0.disconnect();
+            } catch {
+              /* ignore */
+            }
+            finish(`no auction events for ${Date.now() - lastAuctionAt} ms in a running match (stall watchdog)`);
+          }
+        }
+      }
+    }, 1_000);
     const stopTimers = () => {
       clearTimeout(connectTimer);
       clearInterval(liveness);
@@ -334,6 +362,15 @@ export async function runLive(cfg: RunnerConfig, strategy: Strategy): Promise<ne
       db.myRack.onInsert(feed((_c, r) => r.matchId, (_c, r) => bot!.onRack(r)));
       db.myRack.onUpdate(feed((_c, _o, r) => r.matchId, (_c, _o, r) => bot!.onRack(r)));
       db.myRack.onDelete(feed((_c, r) => r.matchId, (_c, r) => bot!.onRackRemoved(r)));
+      db.auction.onInsert(() => {
+        lastAuctionAt = Date.now();
+      });
+      db.auction.onUpdate(() => {
+        lastAuctionAt = Date.now();
+      });
+      db.auctionResult.onInsert(() => {
+        lastAuctionAt = Date.now();
+      });
       db.auction.onInsert(feed((_c, r) => r.matchId, (_c, r) => bot!.onAuction(r)));
       db.auction.onUpdate(feed((_c, _o, r) => r.matchId, (_c, _o, r) => bot!.onAuction(r)));
       db.auctionResult.onInsert(feed((_c, r) => r.matchId, (_c, r) => bot!.onResult(r)));

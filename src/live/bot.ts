@@ -60,6 +60,8 @@ export interface BotOptions {
 
 interface MyAuctionLog {
   bid: number;
+  balAtBid: number; // our balance (optimistic, after our own word rewards) when the bid was computed
+  rackSize: number; // tiles in our rack at bid time (after the words played this auction)
   words: string[];
   bidMs: number; // ms from first sight of the auction to the first submitBid call
   note: string;
@@ -283,7 +285,8 @@ export class LiveBot {
           : `lost to bot ${r.winnerBotId} paid ${num(r.paid)}`;
     this.log(
       `[${this.name}] m${matchId} r${rec.round} '${rec.letter}' bid=${mine ? mine.bid : "-"} ${outcome}` +
-        ` | bal=${view?.myBalance ?? "?"} score=${view?.myScore ?? "?"}` +
+        (mine ? ` | bal@bid=${mine.balAtBid} rack=${mine.rackSize}` : " | catch-up(no bid made by this process)") +
+        ` bal=${view?.myBalance ?? "?"} score=${view?.myScore ?? "?"}` +
         (mine && mine.words.length ? ` words=${mine.words.join(",")}` : "") +
         (mine ? ` bidMs=${mine.bidMs.toFixed(0)}${mine.note ? " " + mine.note : ""}` : ""),
     );
@@ -401,7 +404,9 @@ export class LiveBot {
     if (capped > 0) sends.push(sendBid(capped, "bid"));
     if (want > capped) sends.push(sendBid(want, "optimistic"));
     if (firstBidMs >= 0) this.stats.bidMs.push(firstBidMs);
-    this.myLog.set(a.id, { bid: want, words: plan, bidMs: firstBidMs < 0 ? this.now() - tSeen : firstBidMs, note: "" });
+    let rackSize = 0;
+    for (const n of view1.myRack.values()) rackSize += n;
+    this.myLog.set(a.id, { bid: want, balAtBid: view1.myBalance, rackSize, words: plan, bidMs: firstBidMs < 0 ? this.now() - tSeen : firstBidMs, note: "" });
 
     // ---- 4. settle: reconcile pending words, re-check the final bid ----
     await Promise.all([...settles, ...sends]);
