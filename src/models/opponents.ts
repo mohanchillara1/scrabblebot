@@ -121,13 +121,13 @@ export const PARAMS: Record<string, OpponentParams> = {
   // GodOfThudner / Bron / RackMaw / LexForge-1107 / LUCENT: 14.5 letters/match, spend ~178, ~2.3 mid-game words
   // (half 7+) + ~1 end-game dump, first 7+ word around round 27, ends with ~20 cash. Pays up for high-value tiles.
   "topbot-like": {
-    ...COMMON, name: "topbot-like", base: 9.5, slope: 3.0, level: 1.1, paceEnd: 18, gainK: 0.6,
+    ...COMMON, name: "topbot-like", base: 9.5, slope: 3.0, level: 1.0, sigma: 0.1, tau: 0.1, paceEnd: 18, gainK: 0.6,
     midMinLen: 7, midMinReward: 21, holdUntilBag: 999, dumpAt: 2,
   },
   // 181 LexiconWarrior, 180 StickBot, 179 exzell, 190 Karppa, 192 aipom, 172 Odysseus, 168 Malicious, 178 gas,
   // 186 Lucy, 209 N1gel, 195 Como Se Dice: 12.2 letters, spend ~156, ~2.1 mid words + 0.8 dump, score ~82.
   "mid-bot": {
-    ...COMMON, name: "mid-bot", level: 1.0, paceEnd: 26,
+    ...COMMON, name: "mid-bot", level: 1.0, sigma: 0.35, paceEnd: 26,
     midMinLen: 6, midMinReward: 20, holdUntilBag: 999, dumpAt: 2,
   },
   // 201 Lbender, 191 Primey, 212 Astronaut, 167 Jaeger, 200 Milo: median word at round 63, 86% of words after round 34,

@@ -1,0 +1,19 @@
+# economist notes (running log)
+- 19:06 CT first version written: src/strategies/economist.ts (Monte-Carlo marginal-partition value, kappa*pace coin conversion, Vickrey truthful, FirstPrice shading, prefix-play with option-value loss).
+- 19:21 Results so far (Vickrey, field = 2 topbot-like + 2 mid-bot + 1 quick-cycler unless noted; paired diffs vs economist/test):
+  - kappa sweep (100 matches, seed 3): 1.8 -> 82.9; 1.4 -> +6.8 +-2.2 vs 1.8; 2.3 -> -6.5 +-2.1 vs 1.8; 1.0/1.2 vs 1.4: -2.3 +-2.4 / -1.7 +-2.2 (plateau 1.2-1.4). Default set to 1.5 (real prices ~8% above sim models).
+  - eta (play-now tolerance): 0.05 -> -12.6 +-2.2 vs 0.15; 0.4 -> -4.3 +-1.9 vs 0.15 (seed 4, 100 matches). Keep 0.15.
+  - 6p Vickrey: economist 85.8 vs topbot-like 76.9 (paired d = -8.8 +-1.7), 150 matches seed 2 (kappa 1.8).
+  - 2p Vickrey vs topbot-like (60 m): 267.2 +-8.8 vs 251.4 +-11.4 (paired d -15.8 +-13.9) win 66.7% vs 50%.
+  - 3p Vickrey (70 m): 192.4 +-7.2 vs topbot-like 167.8 +-7.1 (paired d -24.6 +-9.6).
+  - 6p FirstPrice (100 m): 89.1 +-2.1 vs topbot-like 73.2 +-1.7 (paired d -15.8 +-2.2).
+- 19:46 FINAL (src/strategies/economist.ts, typecheck clean). Defaults: kappa 1.5, eta 0.15, paceMode 1 (affordability pace, a0 0.09) for n=2 and n>=5, old spend-need pace for n=3-4.
+  - Affordability pace: pace = clamp(((balance)/((remaining+1)*pbar*a0))^0.6, 0.6, 3), pbar = mean paid of last 20 sold (prior-blended).
+  - a0 sweep (6p, seed 4, 100 m): 0.12 87.5; 0.09 94.7 (+7.2 +-2.0 vs 0.12); 0.065 -2.0 +-2.1 vs 0.09; 0.045 -13.1 +-2.3 vs 0.09. Old pace vs new(0.09) at 6p ~ -5.
+  - 2p vs value-plus (34 m): new pace 499.0 +-2.4 vs old 473.4 (paired +25.7 +-3.7); kappa 2.2 (old pace) 491.6.
+  - 2p vs topbot-like (36 m): new 223.9 +-16.5, old 237.9, topbot-like 239.2 (paired diffs within +-22: no difference).
+  - 3p vs topbot-like+mid-bot (44 m): new pace 164.4 vs old 205.2 (paired +40.8 +-13.1) -> old pace kept for n=3,4.
+  - 7p (110 m): economist 75.7 +-1.7 vs topbot-like 64.6 +-1.6 (paired -11.05 +-1.95).
+  - 6p FirstPrice (100 m): economist 96.4 +-2.0 vs topbot-like 73.2 +-1.7 (paired -23.2 +-2.2).
+  - mixed field (mostly sims/starters, 70 m, 6p): economist 230.5 +-10.5, topbot-like 232.3 +-10.6 (no difference).
+  - Timing: bid avg 3-9 ms, max <=64 ms in sim; words avg 0.3-10 ms, max <=75 ms; synthetic rack-30 bid max 63 ms.

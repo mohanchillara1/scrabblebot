@@ -45,7 +45,7 @@ for cl, ids in CL.items():
         hi_share=float(np.mean([1 if val[w[1]]>=4 else 0 for _,x in seats for w in x['won'] if w[0]<68])),
         tiles_played=float(sum(len(w[1]) for _,x in seats for w in x["words"])/n),
         reward_per_tile=float(sum(w[2] for _,x in seats for w in x["words"])/max(1,sum(len(w[1]) for _,x in seats for w in x["words"]))))
-json.dump(out, open("data/targets.json","w"), indent=1)
+json.dump(out, open("data/targets.json","w"), indent=1); json.dump(out, open("derived/targets.json","w"), indent=1)
 print(f"{'cluster':14s} {'seats':>6s} {'share':>6s} {'score':>12s} {'sd':>5s} {'letters':>7s} {'px':>5s} {'spent':>6s} {'bal_end':>7s} {'words':>5s} {'main':>5s} {'dump':>5s} {'len':>4s} {'7+':>4s} {'medr':>5s} {'>34':>4s} {'>=58':>5s} {'f7r':>5s} {'v1win':>5s} {'v1pd':>5s}")
 for cl,o in out.items():
     print(f"{cl:14s} {o['seat_matches']:6d} {o['share']:6.3f} {o['score']:6.1f}+-{o['score_se']:4.1f} {o['score_sd']:5.1f} {o['letters_won']:7.2f} {o['px']:5.2f} {o['spent']:6.1f} {o['bal_end']:7.1f} {o['words']:5.2f} {o['main_plays']:5.2f} {o['dump_plays']:5.2f} {o['avg_len']:4.2f} {o['len7plus']:4.2f} {o['play_round_median']:5.1f} {o['play_frac_after_r34']:4.2f} {o['play_frac_r58plus']:5.2f} {o['first7_round_median'] or 0:5.1f} {o['v1_winbid']:5.2f} {o['v1_paid']:5.2f}")

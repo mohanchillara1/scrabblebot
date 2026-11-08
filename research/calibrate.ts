@@ -1,6 +1,6 @@
 // Calibration driver: runs the opponent models against each other in the real simulator engine (src/sim/engine.ts,
 // read-only use) and prints simulated market + per-model statistics next to the OBSERVED ones in
-// research/data/targets.json (computed from the 534 six-real-bot matches by research/targets.py).
+// research/derived/targets.json (computed from the 534 six-real-bot matches by research/targets.py).
 //
 //   nice -n 19 npx tsx research/calibrate.ts --matches 600 --seed 1 [--mix botShare|seatShare|a,b,c,d,e,f]
 //        [--set model.param=value,model.param=value] [--json out.json]
@@ -130,7 +130,7 @@ for (let m = 0; m < matches; m++) {
   });
 }
 const secs = (Date.now() - t0) / 1000;
-const targets = JSON.parse(readFileSync(new URL("./data/targets.json", import.meta.url), "utf8")) as Record<string, Record<string, number>>;
+const targets = JSON.parse(readFileSync(new URL("./derived/targets.json", import.meta.url), "utf8")) as Record<string, Record<string, number>>;
 
 const f = (x: number | undefined, d = 1) => (x === undefined || Number.isNaN(x) ? "  -  " : x.toFixed(d));
 console.log(`# calibrate: ${matches} matches, seed ${seed}, mix ${mix}, ${secs.toFixed(1)} s (${(matches / secs).toFixed(0)} matches/s)`);
